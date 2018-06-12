@@ -209,15 +209,18 @@ class PerceptualSimilarityGAN():
 		train_generator=datagen.flow_from_directory('/home/fas/chun/sk2436/project/imagenet/training',target_size=(256,256),
 			batch_size=batch_size)
 
-		
+		log_d=open('disc_loss','a')
+		#log_d.write("START\n")
+		log_g=open('gen_loss','a')
+		#log_g.write("START\n")
 
 
 
 		valid=np.asarray([[1,0] for i in range(batch_size)])
 		fake=np.asarray([[0,1] for i in range(batch_size)])
 		
-		tbCallback=TensorBoard(log_dir='Graph',batch_size=16)
-		tbCallback.set_model(self.combined)
+		#tbCallback=TensorBoard(log_dir='Graph',batch_size=16)
+		#tbCallback.set_model(self.combined) 
 		try:
 			for step in range(1,epochs+1):
 				K.set_value(self.noise_std,[2/256.0*(1-step/500000.0)])
@@ -248,13 +251,16 @@ class PerceptualSimilarityGAN():
 				#Train Generator
 
 				g_loss=self.combined.train_on_batch(imgs,[valid,synthetic_images,synth_comp_features])
-				if step%50==0:
-					print(str(step)+"/"+str(epochs)+"[D loss: "+str(d_loss)+"] [G loss: "+str(g_loss)+"]")
+				if step%50==0 or step==0:
+					log_d.write(str(step)+","+str(d_loss[0])+","+str(d_loss[1])+"\n")
+					log_d.flush()
+					log_g.write(str(step)+","+str(g_loss[0])+","+str(g_loss[1])+","+str(g_loss[2])+","+str(g_loss[3])+"\n")
+					log_g.flush()
 				#print ("%d/%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (step, epochs,d_loss[0], 100*d_loss[1], g_loss))
 				
 				#if step>=epochs:
 				#	break
-				if step%50000==0:
+				if step%10000==0:
 					print("SAVING MODEL")
 					self.save_model()
 
@@ -264,6 +270,8 @@ class PerceptualSimilarityGAN():
 			self.save_model()
 		
 		self.save_model()
+		log_d.close()
+		log_g.close()
 		print("Finish Training")
 
 	from scipy.stats import pearsonr
@@ -294,7 +302,7 @@ class PerceptualSimilarityGAN():
 if __name__=='__main__':
 	print("DEVICE(S) USED")
 	print(device_lib.list_local_devices())
-	gan=PerceptualSimilarityGAN(16,1,.01,.001)
+	gan=PerceptualSimilarityGAN(50,1,.01,.001)
 	plot_model(gan.combined, to_file='model.png')
 	#gan.load_model()
 	#gan.test_single_image("dog.jpg")
