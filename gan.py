@@ -14,8 +14,10 @@ from keras.layers import Input
 from keras.layers import Dense
 from keras.layers import Reshape
 from keras.layers import Lambda
+from keras.layers import Activation
 from keras.initializers import VarianceScaling
 from keras.layers import AveragePooling2D
+#from keras.layers.advanced_activations import LeakyReLU
 from keras import backend as K
 from keras.optimizers import Adam
 from keras.datasets import cifar10
@@ -25,10 +27,19 @@ from keras.models import Sequential, Model
 from keras.applications.vgg16 import preprocess_input
 from keras.utils import plot_model
 
+from keras.preprocessing.image import ImageDataGenerator
+from keras.preprocessing import image
+
+from keras.callbacks import TensorBoard
+
+
 import tensorflow as tf
 
 
 from scipy.misc import imresize
+from cv2 import imwrite
+
+from tensorflow.python.client import device_lib
 
 class PerceptualSimilarityGAN():
 
@@ -42,7 +53,7 @@ class PerceptualSimilarityGAN():
 		self.comp_network=Comparator(network=comparator_network)
 		self.feat_comp_size=self.comp_network.model.layers[19].output_shape
 		self.gen_inp_size=self.comp_network.model.layers[20].output_shape
-		self.noise_std=2/256.0
+		self.noise_std=K.variable([0],dtype='float32')
 		self.batch_size=batch_size
 
 		#K.set_learning_phase(1) 
@@ -55,7 +66,7 @@ class PerceptualSimilarityGAN():
 		l2=Model(self.comp_network.model.input,self.comp_network.model.layers[20].output)
 		y1=l1(x)
 		y2=l2(x)
-		self.feature_model=Model(input_image,[y1,y2])
+		self.feature_model=Model(input_image,[y1,y2],name="Comparator")
 		#feature_model=Model(self.comp_network.model.input,[self.comp_network.model.layers[19].output,self.comp_network.model.layers[20].output],name="Comparator")
 		#feature_model.trainable=False
 
@@ -123,6 +134,7 @@ class PerceptualSimilarityGAN():
 		x=BatchNormalization()(x)
 		x=Conv2DTranspose(3,4,strides=2,name='deconv0',activation=None,use_bias=False,kernel_initializer=var_initializer,padding='same')(x)
 		#model.add(Lambda(lambda x: K.resize_images(x,1.0/8,1.0/8,"channels_last")))
+		x=Activation('tanh')(x)
 		x=Reshape(self.img_shape)(x)
 
 		#model.summary()
@@ -145,51 +157,57 @@ class PerceptualSimilarityGAN():
 
 
 		x=GaussianNoise(noise_param)(image)
-		x=Conv2D(32,(7,7),strides=(4,4),name='conv1',activation=leaky)(x)
-		x=Conv2D(64,(5,5),strides=(1,1),name='conv2',activation=leaky)(x)
+		x=Conv2D(32,(7,7),strides=(4,4),name='conv1')(x)
+
+		x=Conv2D(64,(5,5),strides=(1,1),name='conv2')(x)
+		x=LeakyReLU(alpha=0.3)(x)
 		x=BatchNormalization()(x)
-		x=Conv2D(128,(3,3),strides=(2,2),name='conv3',activation=leaky)(x)
+		x=Conv2D(128,(3,3),strides=(2,2),name='conv3')(x)
+		x=LeakyReLU(alpha=0.3)(x)
 		x=BatchNormalization()(x)
-		x=Conv2D(256,(3,3),strides=(1,1),name='conv4',activation=leaky)(x) 
+		x=Conv2D(256,(3,3),strides=(1,1),name='conv4')(x) 
+		x=LeakyReLU(alpha=0.3)(x)
 		x=BatchNormalization()(x)
-		x=Conv2D(256,(3,3),strides=(2,2),name='conv5',activation=leaky)(x)
+		x=Conv2D(256,(3,3),strides=(2,2),name='conv5')(x)
+		x=LeakyReLU(alpha=0.3)(x)
 		x=BatchNormalization()(x)
 		x=AveragePooling2D(pool_size=(11,11),strides=(11,11),name='pool5')(x)
 		y0=Flatten(name='pool5_reshape')(x)
-		x=Dense(1024,name='feat_fc1',activation=leaky)(features_noised)
+		x=Dense(1024,name='feat_fc1')(features_noised)
+		x=LeakyReLU(alpha=0.3)(x)
 		x=BatchNormalization()(x)
-		y1=Dense(512,name='feat_fc2',activation=leaky)(x)
+		y1=Dense(512,name='feat_fc2')(x)
+		y1=LeakyReLU(alpha=0.3)(y1)
 		y1=BatchNormalization()(y1)
 		x=Concatenate(axis=1,name='concat_fc5')([y0,y1])
 		x=Dropout(0.5,name='drop5')(x)
-		x=Dense(512,activation=leaky,name='fc6')(x)
+		x=Dense(512,name='fc6')(x)
+		x=LeakyReLU(alpha=0.3)(x)
 		x=BatchNormalization()(x)
 		x=Dropout(0.5,name='drop6')(x)
 		x=Dense(2,name='fc7',activation=None)(x)
 
-		model=Model([image,features],x)
+		model=Model([image,features],x,name="Discriminator")
 
 		return model
 
 	def save_model(self):
-		self.combined.save("GANs/Combined")
-		self.generator.save("GANs/Generator")
-		self.discriminator.save("GANs/Discriminator")
+		np.save("models/GANs/Combined",self.combined.get_weights())
+		np.save("models/GANs/Generator",self.generator.get_weights())
+		np.save("models/GANs/Discriminator",self.discriminator.get_weights())
 
 	def load_model(self):
 
-		self.combined=load_model("GANs/Combined")
-		self.generator=load_model("GANs/Generator")
-		self.discriminator=load_model("GANs/Discriminator")
+		self.combined.set_weights(np.load("models/GANs/Combined.npy"))
+		self.generator.set_weights(np.load("models/GANs/Generator.npy"))
+		self.discriminator.set_weights(np.load("models/GANs/Discriminator.npy"))
 
 	def train(self,epochs):
 		batch_size=self.batch_size
 
-		(X_train, _), (_, _) = cifar10.load_data()
-
-		mean = 120.707
-		std = 64.15
-		X_train=(X_train-mean)/(std+1e-7)
+		datagen=ImageDataGenerator()
+		train_generator=datagen.flow_from_directory('/home/fas/chun/sk2436/project/imagenet/training',target_size=(256,256),
+			batch_size=batch_size)
 
 		
 
@@ -197,18 +215,17 @@ class PerceptualSimilarityGAN():
 
 		valid=np.asarray([[1,0] for i in range(batch_size)])
 		fake=np.asarray([[0,1] for i in range(batch_size)])
+		
+		tbCallback=TensorBoard(log_dir='Graph',batch_size=16)
+		tbCallback.set_model(self.combined)
 		try:
-			for step in range(epochs):
-				idx = np.random.randint(0, X_train.shape[0], batch_size)
-				imgs_raw = X_train[idx]
+			for step in range(1,epochs+1):
+				K.set_value(self.noise_std,[2/256.0*(1-step/500000.0)])
+				batch_data=train_generator.next()
+				imgs_raw=batch_data[0]
+				print(imgs_raw.shape)
 				
-				imgs=np.zeros((imgs_raw.shape[0],256,256,3))
-				#imgs2=np.zeros((imgs_raw.shape[0],224,224,3))
-				for i in range(imgs.shape[0]):
-					imgs[i,:,:,:]=imresize(imgs_raw[i,:,:,:],(256,256,3))
-					#imgs2[i,:,:,:]=imresize(imgs_raw[i,:,:,:],(224,224,3))
-				
-				imgs=preprocess_input(imgs)
+				imgs=preprocess_input(imgs_raw)
 
 				feats=self.feature_model.predict_on_batch(imgs)
 
@@ -229,14 +246,15 @@ class PerceptualSimilarityGAN():
 				d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
 
 				#Train Generator
-				
 
-
-				g_loss=self.combined.train_on_batch(imgs,[valid,imgs,imgs_comp_features])
-				print(str(step)+"/"+str(epochs)+"[D loss: "+str(d_loss)+"] [G loss: "+str(g_loss)+"]")
+				g_loss=self.combined.train_on_batch(imgs,[valid,synthetic_images,synth_comp_features])
+				if step%50==0:
+					print(str(step)+"/"+str(epochs)+"[D loss: "+str(d_loss)+"] [G loss: "+str(g_loss)+"]")
 				#print ("%d/%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (step, epochs,d_loss[0], 100*d_loss[1], g_loss))
-
-				if step%30==0:
+				
+				#if step>=epochs:
+				#	break
+				if step%50000==0:
 					print("SAVING MODEL")
 					self.save_model()
 
@@ -248,10 +266,39 @@ class PerceptualSimilarityGAN():
 		self.save_model()
 		print("Finish Training")
 
+	from scipy.stats import pearsonr
+	
+	def test_single_image(self,img_path):
+		from PIL import Image
+		from scipy.stats import pearsonr
+		input_image=image.load_img(img_path,target_size=(256,256))
+		input_image=image.img_to_array(input_image)
+		input_image=np.expand_dims(input_image, axis = 0)
+		input_image=preprocess_input(input_image)
+		#print(input_image.shape)
+		features=self.feature_model.predict(input_image)[1] 
+		synthetic_images=self.generator.predict(features)
+		synthetic_image=synthetic_images[0]
+		formatted = (synthetic_image * 255 / np.max(synthetic_image)).astype('uint8')
+		features2=self.feature_model.predict(synthetic_images)[1]
+		img = Image.fromarray(formatted)
+		img.save("recon.png")
+		print(features.shape)
+		print(features2.shape)
+		print(pearsonr(features[0,:],features2[0,:]))
+		
+
+
+		
+
 if __name__=='__main__':
-	gan=PerceptualSimilarityGAN(20,1,.1,.001)
+	print("DEVICE(S) USED")
+	print(device_lib.list_local_devices())
+	gan=PerceptualSimilarityGAN(16,1,.01,.001)
 	plot_model(gan.combined, to_file='model.png')
-	gan.train(30000)
+	#gan.load_model()
+	#gan.test_single_image("dog.jpg")
+	gan.train(200000)
 
 
 
